@@ -2,3 +2,8 @@
 /data/processed
 
 .DS_Store
+todo_*.*
+.aws
+*.pem
+*.key
+.env
