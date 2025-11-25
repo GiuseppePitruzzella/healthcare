@@ -1,5 +1,8 @@
 /data/raw
 /data/processed
+/data/*.csv
+
+/services/*.ipynb
 
 .DS_Store
 todo_*.*
@@ -7,3 +10,25 @@ todo_*.*
 *.pem
 *.key
 .env
+/docs/log.md
+
+# dependencies
+/frontend/node_modules
+/frontend/.pnp
+/frontend/.pnp.js
+
+# testing
+/frontend/coverage
+
+# production
+/build
+
+# misc
+/frontend/.env.local
+/frontend/.env.development.local
+/frontend/.env.test.local
+/frontend/.env.production.local
+
+/frontend/npm-debug.log*
+/frontend/yarn-debug.log*
+/frontend/yarn-error.log*
