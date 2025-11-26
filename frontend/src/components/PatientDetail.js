@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
-function PatientDetail({ patientId, apiUrl }) {
+// Notare: ora riceviamo 'getAuthToken' come prop dal padre
+function PatientDetail({ patientId, apiUrl, getAuthToken }) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -11,11 +12,17 @@ function PatientDetail({ patientId, apiUrl }) {
 
     const fetchHistory = async () => {
       setLoading(true);
+      
+      // 1. Recuperiamo il token
+      const token = await getAuthToken();
+      if (!token) return;
+
       try {
-        // Chiama l'endpoint specifico /patients/PTxxxxx
-        const response = await axios.get(`${apiUrl}/${patientId}`);
+        // 2. Chiamata API autenticata
+        const response = await axios.get(`${apiUrl}/${patientId}`, {
+          headers: { Authorization: token }
+        });
         
-        // I dati arrivano invertiti (dal più recente), li giriamo per il grafico (dal più vecchio)
         const reversedData = response.data.history.reverse(); 
         setHistory(reversedData);
       } catch (error) {
@@ -25,12 +32,10 @@ function PatientDetail({ patientId, apiUrl }) {
     };
 
     fetchHistory();
-    
-    // Polling: Aggiorna il grafico ogni 5 secondi automaticamente!
-    const interval = setInterval(fetchHistory, 30000);
+    const interval = setInterval(fetchHistory, 5000);
     return () => clearInterval(interval);
 
-  }, [patientId, apiUrl]);
+  }, [patientId, apiUrl, getAuthToken]); // Aggiunto getAuthToken alle dipendenze
 
   if (!patientId) return <div className="placeholder">Seleziona un paziente dalla lista</div>;
   if (loading && history.length === 0) return <div>Caricamento dati clinici...</div>;
@@ -44,16 +49,16 @@ function PatientDetail({ patientId, apiUrl }) {
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={history}>
             <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="timestamp" tick={false} /> {/* Nascondiamo l'ora per pulizia */}
-            <YAxis domain={[40, 160]} /> {/* Scala fissa medica */}
+            <XAxis dataKey="timestamp" tick={false} />
+            <YAxis domain={[40, 160]} />
             <Tooltip />
             <Legend />
             <Line type="monotone" dataKey="heart_rate" stroke="#8884d8" strokeWidth={2} activeDot={{ r: 8 }} />
           </LineChart>
         </ResponsiveContainer>
       </div>
-
-      <div className="chart-container">
+      {/* ... Il resto dei grafici rimane uguale ... */}
+       <div className="chart-container">
         <h3>Pressione Sanguigna (mmHg)</h3>
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={history}>
