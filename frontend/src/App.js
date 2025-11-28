@@ -4,13 +4,13 @@ import { Authenticator } from '@aws-amplify/ui-react';
 import { fetchAuthSession } from 'aws-amplify/auth'; 
 import '@aws-amplify/ui-react/styles.css';
 import PatientDetail from './components/PatientDetail';
+import AlertsDropdown from './components/AlertsDropdown';
 import './App.css';
 
 function App() {
   const [patients, setPatients] = useState([]);
   const [selectedPatientId, setSelectedPatientId] = useState(null);
   const [activeAlerts, setActiveAlerts] = useState([]);
-  const [wsStatus, setWsStatus] = useState('disconnected'); // NUOVO: stato connessione
 
   const BASE_URL = "https://kok1mewu89.execute-api.eu-north-1.amazonaws.com/prod";
   const WEBSOCKET_URL = "wss://dbohl3t6fa.execute-api.eu-north-1.amazonaws.com/production/";
@@ -61,34 +61,29 @@ function App() {
 
       const wsUrl = `${WEBSOCKET_URL}?token=${encodeURIComponent(token)}`;
       console.log("🔌 Tentativo di connessione WebSocket...");
-      console.log("   URL:", wsUrl);
       
-      setWsStatus('connecting');
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
         console.log("✅ WebSocket CONNESSO con successo!");
-        setWsStatus('connected');
       };
 
       ws.onmessage = (event) => {
-        console.log("📩 Messaggio WebSocket ricevuto RAW:", event.data);
+        console.log("📩 Messaggio WebSocket ricevuto:", event.data);
         
         try {
           const data = JSON.parse(event.data);
-          console.log("📦 Dati parsati:", data);
           
           if (data.action === 'newAlert') {
             const newAlert = data.data;
-            console.log("🚨 ALERT VALIDO RICEVUTO:", newAlert);
+            console.log("🚨 ALERT RICEVUTO:", newAlert);
             
             setActiveAlerts(prev => {
-              const updated = [newAlert, ...prev];
-              console.log("📊 Allarmi aggiornati, totale:", updated.length);
-              return updated;
+              // Evita duplicati basati su alert_id
+              const exists = prev.some(alert => alert.alert_id === newAlert.alert_id);
+              if (exists) return prev;
+              return [newAlert, ...prev];
             });
-          } else {
-            console.warn("⚠️ Messaggio ricevuto ma action non è 'newAlert':", data);
           }
         } catch (error) {
           console.error("❌ Errore parsing messaggio WebSocket:", error);
@@ -96,12 +91,7 @@ function App() {
       };
 
       ws.onclose = (event) => {
-        console.log("🔌 WebSocket DISCONNESSO");
-        console.log("   Code:", event.code);
-        console.log("   Reason:", event.reason);
-        console.log("   Clean:", event.wasClean);
-        
-        setWsStatus('disconnected');
+        console.log("🔌 WebSocket DISCONNESSO - Code:", event.code);
         
         if (!isUnmounted) {
           console.log("🔄 Riconnessione tra 5 secondi...");
@@ -111,7 +101,6 @@ function App() {
 
       ws.onerror = (error) => {
         console.error("❌ WebSocket ERRORE:", error);
-        setWsStatus('error');
       };
     };
 
@@ -127,6 +116,20 @@ function App() {
     };
   }, [WEBSOCKET_URL, getAuthToken]);
 
+  // Rimuovi un singolo allarme
+  const handleRemoveAlert = useCallback((alertId) => {
+    setActiveAlerts(prev => prev.filter(alert => 
+      (alert.alert_id || alert.patient_id) !== alertId
+    ));
+    console.log(`🗑️ Allarme rimosso: ${alertId}`);
+  }, []);
+
+  // Cancella tutti gli allarmi
+  const handleClearAllAlerts = useCallback(() => {
+    setActiveAlerts([]);
+    console.log("🗑️ Tutti gli allarmi cancellati");
+  }, []);
+
   return (
     <Authenticator>
       {({ signOut, user }) => (
@@ -135,27 +138,12 @@ function App() {
             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
               <h1>🏥 Cloud Hospital Monitor</h1>
               <div style={{display: 'flex', alignItems: 'center', gap: '15px'}}>
-                {/* Indicatore stato WebSocket */}
-                <div style={{
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '8px',
-                  fontSize: '0.8rem',
-                  padding: '4px 8px',
-                  borderRadius: '4px',
-                  backgroundColor: wsStatus === 'connected' ? '#dcfce7' : '#fee2e2',
-                  color: wsStatus === 'connected' ? '#166534' : '#991b1b'
-                }}>
-                  <span>{wsStatus === 'connected' ? '🟢' : '🔴'}</span>
-                  <span>{wsStatus === 'connected' ? 'Live' : 'Disconnesso'}</span>
-                </div>
-                
-                {/* Contatore allarmi */}
-                {activeAlerts.length > 0 && (
-                  <span className="live-alert-count">
-                    🚨 {activeAlerts.length} NUOVI ALLARMI!
-                  </span>
-                )}
+                {/* Dropdown Allarmi */}
+                <AlertsDropdown 
+                  alerts={activeAlerts}
+                  onRemoveAlert={handleRemoveAlert}
+                  onClearAll={handleClearAllAlerts}
+                />
                 
                 <span style={{fontSize: '0.9rem'}}>Dr. {user?.username}</span>
                 <button onClick={signOut} style={{cursor: 'pointer', padding: '5px 10px'}}>
@@ -164,25 +152,6 @@ function App() {
               </div>
             </div>
           </header>
-          
-          {/* Debug panel - RIMUOVI DOPO IL TEST */}
-          <div style={{
-            padding: '10px',
-            margin: '10px',
-            backgroundColor: '#f0f0f0',
-            border: '1px solid #ccc',
-            borderRadius: '4px',
-            fontSize: '0.85rem'
-          }}>
-            <strong>🔧 Debug Info:</strong><br/>
-            WebSocket Status: <strong>{wsStatus}</strong><br/>
-            Active Alerts: <strong>{activeAlerts.length}</strong><br/>
-            {activeAlerts.length > 0 && (
-              <>
-                Latest Alert: <code>{JSON.stringify(activeAlerts[0], null, 2)}</code>
-              </>
-            )}
-          </div>
           
           <div className="main-container">
             <div className="sidebar">
