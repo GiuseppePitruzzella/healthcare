@@ -78,11 +78,22 @@ function App() {
             const newAlert = data.data;
             console.log("🚨 ALERT RICEVUTO:", newAlert);
             
+            // 1. Aggiungi l'allarme alla lista
             setActiveAlerts(prev => {
-              // Evita duplicati basati su alert_id
               const exists = prev.some(alert => alert.alert_id === newAlert.alert_id);
               if (exists) return prev;
               return [newAlert, ...prev];
+            });
+
+            // 2. NUOVO: Aggiorna lo status del paziente in tempo reale
+            setPatients(prev => {
+              return prev.map(patient => {
+                if (patient.patient_id === newAlert.patient_id) {
+                  console.log(`🔄 Aggiornamento status: ${patient.name} → Critical`);
+                  return { ...patient, status: 'Critical' };
+                }
+                return patient;
+              }).sort((a, b) => (a.status === 'Critical' ? -1 : 1)); // Riordina con Critical in cima
             });
           }
         } catch (error) {
@@ -115,6 +126,27 @@ function App() {
       }
     };
   }, [WEBSOCKET_URL, getAuthToken]);
+
+  // NUOVO: Polling periodico per aggiornare la lista pazienti dal database (ogni 30 secondi)
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const token = await getAuthToken();
+      if (!token) return;
+
+      try {
+        const response = await axios.get(`${BASE_URL}/patients`, {
+          headers: { Authorization: token }
+        });
+        const sorted = response.data.sort((a, b) => (a.status === 'Critical' ? -1 : 1));
+        setPatients(sorted);
+        console.log("🔄 Lista pazienti aggiornata dal database");
+      } catch (error) {
+        console.error("Errore refresh pazienti:", error);
+      }
+    }, 30000); // Ogni 30 secondi
+
+    return () => clearInterval(interval);
+  }, [BASE_URL, getAuthToken]);
 
   // Rimuovi un singolo allarme
   const handleRemoveAlert = useCallback((alertId) => {
