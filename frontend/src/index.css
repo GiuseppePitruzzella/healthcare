@@ -1,13 +1,231 @@
+/* Reset e Base */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
 code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+  font-family: 'Courier New', monospace;
+}
+
+/* ============================================
+   CUSTOMIZZAZIONE AMPLIFY UI - STILE MINIMALE
+   ============================================ */
+
+/* Container principale del login */
+[data-amplify-authenticator] {
+  --amplify-colors-background-primary: #fafafa;
+  --amplify-colors-background-secondary: #ffffff;
+  --amplify-colors-border-primary: #e8e8e8;
+  --amplify-colors-border-focus: #0a0a0a;
+  
+  --amplify-colors-font-primary: #0a0a0a;
+  --amplify-colors-font-secondary: #737373;
+  --amplify-colors-font-interactive: #0a0a0a;
+  
+  --amplify-colors-brand-primary-10: #fafafa;
+  --amplify-colors-brand-primary-80: #0a0a0a;
+  --amplify-colors-brand-primary-90: #0a0a0a;
+  --amplify-colors-brand-primary-100: #0a0a0a;
+  
+  --amplify-space-small: 0.75rem;
+  --amplify-space-medium: 1rem;
+  --amplify-space-large: 1.5rem;
+  
+  --amplify-radii-small: 6px;
+  --amplify-radii-medium: 8px;
+  
+  --amplify-font-sizes-small: 0.875rem;
+  --amplify-font-sizes-medium: 0.9rem;
+  
+  --amplify-components-button-primary-background-color: #0a0a0a;
+  --amplify-components-button-primary-hover-background-color: #2a2a2a;
+  --amplify-components-button-primary-active-background-color: #0a0a0a;
+  --amplify-components-button-primary-border-color: #0a0a0a;
+  
+  --amplify-components-fieldcontrol-border-color: #e8e8e8;
+  --amplify-components-fieldcontrol-focus-border-color: #0a0a0a;
+}
+
+/* Sfondo della pagina di login */
+[data-amplify-authenticator] [data-amplify-router] {
+  background: #fafafa;
+  border: none;
+  box-shadow: none;
+}
+
+/* Card del form */
+[data-amplify-authenticator] [data-amplify-container] {
+  background: #ffffff;
+  border: 1px solid #e8e8e8;
+  border-radius: 12px;
+  box-shadow: none;
+  padding: 3rem;
+  max-width: 420px;
+}
+
+/* Header del form (Sign In, Create Account, etc.) */
+[data-amplify-authenticator] [data-amplify-form] > header {
+  padding-bottom: 2rem;
+}
+
+[data-amplify-authenticator] [data-amplify-form] h2,
+[data-amplify-authenticator] [data-amplify-form] h3 {
+  font-size: 1.5rem;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: #0a0a0a;
+  text-align: center;
+}
+
+/* Labels */
+[data-amplify-authenticator] label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #737373;
+  margin-bottom: 0.5rem;
+}
+
+/* Input fields */
+[data-amplify-authenticator] input {
+  background: #fafafa;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  font-size: 0.9rem;
+  color: #0a0a0a;
+  transition: all 0.2s ease;
+}
+
+[data-amplify-authenticator] input:focus {
+  background: #ffffff;
+  border-color: #0a0a0a;
+  outline: none;
+  box-shadow: none;
+}
+
+[data-amplify-authenticator] input::placeholder {
+  color: #b3b3b3;
+}
+
+/* Buttons */
+[data-amplify-authenticator] button[type="submit"],
+[data-amplify-authenticator] button[data-variation="primary"] {
+  background: #0a0a0a;
+  border: 1px solid #0a0a0a;
+  border-radius: 6px;
+  padding: 0.75rem 1.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #ffffff;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+[data-amplify-authenticator] button[type="submit"]:hover,
+[data-amplify-authenticator] button[data-variation="primary"]:hover {
+  background: #2a2a2a;
+  border-color: #2a2a2a;
+}
+
+[data-amplify-authenticator] button[type="submit"]:active,
+[data-amplify-authenticator] button[data-variation="primary"]:active {
+  background: #0a0a0a;
+  transform: scale(0.98);
+}
+
+/* Link buttons (Sign up, Back to Sign In, etc.) */
+[data-amplify-authenticator] button[data-variation="link"],
+[data-amplify-authenticator] a {
+  color: #0a0a0a;
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 400;
+  border-bottom: 1px solid transparent;
+  transition: all 0.2s ease;
+}
+
+[data-amplify-authenticator] button[data-variation="link"]:hover,
+[data-amplify-authenticator] a:hover {
+  border-bottom-color: #0a0a0a;
+}
+
+/* Footer links */
+[data-amplify-authenticator] [data-amplify-footer] {
+  padding-top: 2rem;
+  text-align: center;
+}
+
+[data-amplify-authenticator] [data-amplify-footer] span {
+  color: #737373;
+  font-size: 0.875rem;
+}
+
+/* Error messages */
+[data-amplify-authenticator] [role="alert"],
+[data-amplify-authenticator] .amplify-alert {
+  background: #fef2f2;
+  border: 1px solid #fee2e2;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  color: #991b1b;
+  font-size: 0.875rem;
+}
+
+/* Tabs (Sign In / Create Account) */
+[data-amplify-authenticator] [role="tablist"] {
+  border-bottom: 1px solid #e8e8e8;
+  margin-bottom: 2rem;
+}
+
+[data-amplify-authenticator] [role="tab"] {
+  color: #999999;
+  font-size: 0.875rem;
+  font-weight: 400;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s ease;
+}
+
+[data-amplify-authenticator] [role="tab"][aria-selected="true"] {
+  color: #0a0a0a;
+  font-weight: 500;
+  border-bottom-color: #0a0a0a;
+}
+
+/* Loading spinner */
+[data-amplify-authenticator] [data-amplify-loader] {
+  border-color: #e8e8e8;
+  border-top-color: #0a0a0a;
+}
+
+/* Checkbox (Remember me) */
+[data-amplify-authenticator] input[type="checkbox"] {
+  width: auto;
+  accent-color: #0a0a0a;
+}
+
+/* Rimozione ombre e effetti non necessari */
+[data-amplify-authenticator] * {
+  box-shadow: none !important;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  [data-amplify-authenticator] [data-amplify-container] {
+    padding: 2rem;
+    margin: 1rem;
+  }
 }

@@ -1,114 +1,75 @@
 flowchart TD
-    %% Definizione Stili
-    classDef aws fill:#FF9900,stroke:#232F3E,color:white,stroke-width:2px;
-    classDef db fill:#3B48CC,stroke:#232F3E,color:white,stroke-width:2px;
-    classDef user fill:#E6F2F8,stroke:#333,color:black;
-    classDef security fill:#DD344C,stroke:#232F3E,color:white;
-    classDef ai fill:#01A88D,stroke:#232F3E,color:white;
+    %% Stili
+    classDef client fill:#E6F2F8,stroke:#333,stroke-width:2px;
+    classDef security fill:#FFCCCC,stroke:#b30000,stroke-width:2px;
+    classDef compute fill:#FF9900,stroke:#232F3E,color:white;
+    classDef db fill:#3B48CC,stroke:#232F3E,color:white;
+    classDef api fill:#8C4FFF,stroke:#232F3E,color:white;
+    classDef notify fill:#FF5252,stroke:#232F3E,color:white;
 
-    subgraph Users ["Utenti & Client"]
-        Doc["👨‍⚕️ Medico / Infermiere"]:::user
-        Mgmt["👔 Direzione Sanitaria"]:::user
+    subgraph CLIENT ["💻 LATO CLIENT (Il Medico)"]
+        Browser["React Dashboard<br/>(S3 Hosting)"]:::client
+        Email["📩 Email Medico"]:::client
     end
 
-    subgraph AWS ["☁️ AWS Cloud Environment"]
-        style AWS fill:#f9f9f9,stroke:#333,stroke-width:2px
-
-        subgraph Security ["Sicurezza & Identità"]
-            Cognito["Amazon Cognito<br/>(Auth & User Pools)"]:::security
-            IAM["AWS IAM<br/>(Policies & Roles)"]:::security
+    subgraph CLOUD ["☁️ AWS CLOUD"]
+        
+        subgraph SEC ["🛡️ Sicurezza"]
+            Cognito["Amazon Cognito<br/>(User Pool)"]:::security
         end
 
-        subgraph FrontendHost ["Hosting"]
-            S3Web["Amazon S3<br/>(Static Website Hosting)"]:::aws
+        subgraph GATEWAY ["🚪 Porte d'Ingresso"]
+            APIGW_REST["API Gateway REST<br/>(Dati Storici)"]:::api
+            APIGW_WS["API Gateway WebSocket<br/>(Real-Time)"]:::api
         end
 
-        subgraph Gateway ["API Layer (Ingress)"]
-            APIGW["Amazon API Gateway"]:::aws
-            subgraph APITypes ["Protocolli"]
-                REST["REST API<br/>(CRUD & History)"]
-                WS["WebSocket API<br/>(Real-Time Push)"]
-            end
+        subgraph COMPUTE ["⚙️ Logica (Lambda)"]
+            Sim["λ Simulator<br/>(Genera Dati)"]:::compute
+            Detect["λ Alert Detector<br/>(Analisi & Push)"]:::compute
+            ApiHandler["λ API Handler<br/>(Query Dati)"]:::compute
+            ConnMgr["λ Connection Mgr<br/>(Gestione WS)"]:::compute
         end
 
-        subgraph Compute ["Serverless Compute (Lambda)"]
-            Sim["λ vitals-simulator<br/>(Generazione Dati)"]:::aws
-            Detect["λ alert-detector<br/>(Analisi & ML)"]:::aws
-            APIH["λ api-handler<br/>(Backend REST)"]:::aws
-            Notify["λ notifier<br/>(Gestione WS Push)"]:::aws
-            ETL["λ etl-aggregator<br/>(Data Processing)"]:::aws
+        subgraph DATA ["💾 Dati (DynamoDB)"]
+            DDB_Vit["Tabella VitalSigns<br/>(Stream Attivo)"]:::db
+            DDB_Alert["Tabella Alerts"]:::db
+            DDB_Conn["Tabella Connections<br/>(Utenti Online)"]:::db
+            DDB_Pat["Tabella Patients"]:::db
         end
 
-        subgraph Intelligence ["AI & Machine Learning"]
-            Sage["Amazon SageMaker<br/>(Inference Endpoint)"]:::ai
+        subgraph NOTIFY ["📢 Notifiche"]
+            SNS["Amazon SNS<br/>(Topic Allarmi)"]:::notify
         end
 
-        subgraph DataStorage ["Data Layer"]
-            subgraph NoSQL ["Operativo (Hot Data)"]
-                DDB[("Amazon DynamoDB")]:::db
-                Tables["Tables: Patients, VitalSigns, Alerts, Connections"]
-            end
-            subgraph Relational ["Analitico (Cold Data)"]
-                RDS[("Amazon RDS<br/>(Storico Aggregato)")]:::db
-            end
-            subgraph ObjectStore ["Data Lake & Backup"]
-                S3Data[("Amazon S3 Bucket<br/>(MIMIC-III, Backups)")]:::aws
-            end
-        end
+        EventBridge["⏰ EventBridge<br/>(Ogni 5 min)"]:::compute
 
-        subgraph Monitoring ["Orchestration & Ops"]
-            CW["Amazon CloudWatch<br/>(Logs, Alarms)"]:::aws
-            EB["EventBridge<br/>(Scheduler)"]:::aws
-        end
-
-        subgraph BI ["Business Intelligence"]
-            QS["Amazon QuickSight"]:::ai
-        end
     end
 
-    %% --- RELAZIONI E FLUSSI ---
+    %% FLUSSI
+    %% 1. Autenticazione
+    Browser -- "1. Login" --> Cognito
+    Cognito -- "Token JWT" --> Browser
 
-    %% 1. Autenticazione & Accesso
-    Doc -- "1. Login (Credenziali)" --> Cognito
-    Cognito -- "Token JWT" --> Doc
-    Doc -- "2. Carica App (React)" --> S3Web
+    %% 2. Simulazione
+    EventBridge -- "Trigger" --> Sim
+    Sim -- "Lettura Profili" --> DDB_Pat
+    Sim -- "Scrittura Dati" --> DDB_Vit
 
-    %% 2. Connessione & Polling (Medico)
-    Doc -- "3. Connect (WebSocket) + JWT" --> WS
-    WS -.-> APIGW
-    APIGW -- "Auth Check" --> Cognito
-    WS -- "Register Client ID" --> Notify
-    Notify -- "Save Connection" --> DDB
-
-    Doc -- "4. API Call (History) + JWT" --> REST
-    REST -.-> APIGW
-    REST -- "Invoke" --> APIH
-    APIH -- "Query" --> DDB
-
-    %% 3. Simulazione Dati (Core Loop)
-    EB -- "Trigger (Ogni 5 min)" --> Sim
-    Sim -- "Read Patient Config" --> DDB
-    Sim -- "Write New Vitals" --> DDB
-
-    %% 4. Analisi Real-Time & ML
-    DDB -- "DynamoDB Streams (Trigger)" --> Detect
-    Detect -- "Predict Risk Request" --> Sage
-    Sage -- "Risk Score" --> Detect
-    Detect -- "Write Alert (Se Critico)" --> DDB
+    %% 3. Rilevamento & Push
+    DDB_Vit -- "DynamoDB Stream" --> Detect
+    Detect -- "Scrive Allarme" --> DDB_Alert
+    Detect -- "A. Invia Email" --> SNS
+    SNS -.-> Email
+    Detect -- "B. Push WebSocket" --> APIGW_WS
     
-    %% 5. Notifica Push (Il nuovo flusso)
-    Detect -- "Data Payload" --> Notify
-    Notify -- "Lookup Active Users" --> DDB
-    Notify -- "Push JSON" --> WS
-    WS -- "Real-Time Update" --> Doc
+    %% 4. Visualizzazione
+    Browser -- "2. REST GET + Token" --> APIGW_REST
+    APIGW_REST -- "Auth Check" --> Cognito
+    APIGW_REST --> ApiHandler
+    ApiHandler --> DDB_Vit & DDB_Alert
 
-    %% 6. Analytics & Management
-    EB -- "Trigger (Notturno)" --> ETL
-    ETL -- "Extract & Aggregate" --> DDB
-    ETL -- "Load Stats" --> RDS
-    Mgmt -- "View Reports" --> QS
-    QS -- "SQL Query" --> RDS
-
-    %% Formattazione Layout
-    DDB --- Tables
-    REST ~~~ WS
+    %% 5. Real-Time
+    Browser <== "3. WebSocket + Token" ==> APIGW_WS
+    APIGW_WS --> ConnMgr
+    ConnMgr --> DDB_Conn
+    APIGW_WS -- "Push Alert" --> Browser
