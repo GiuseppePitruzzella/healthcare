@@ -69,35 +69,76 @@ function App() {
       };
 
       ws.onmessage = (event) => {
-        console.log("📩 Messaggio WebSocket ricevuto:", event.data);
+        console.log("📩 Messaggio ricevuto:", event.data);
         
         try {
-          const data = JSON.parse(event.data);
+          const message = JSON.parse(event.data);
+          console.log("📦 Action:", message.action);
           
-          if (data.action === 'newAlert') {
-            const newAlert = data.data;
+          // CASO 1: Nuovo Allarme Critico
+          if (message.action === 'newAlert') {
+            const newAlert = message.data;
             console.log("🚨 ALERT RICEVUTO:", newAlert);
             
-            // 1. Aggiungi l'allarme alla lista
+            // 1. Aggiungi alla lista allarmi (campanella)
             setActiveAlerts(prev => {
               const exists = prev.some(alert => alert.alert_id === newAlert.alert_id);
-              if (exists) return prev;
+              if (exists) {
+                console.log("⚠️ Allarme già presente, ignorato");
+                return prev;
+              }
+              console.log("✅ Allarme aggiunto alla lista");
               return [newAlert, ...prev];
             });
 
-            // 2. NUOVO: Aggiorna lo status del paziente in tempo reale
+            // 2. CRITICO: Aggiorna lo status del paziente → Critical
             setPatients(prev => {
-              return prev.map(patient => {
+              const updated = prev.map(patient => {
                 if (patient.patient_id === newAlert.patient_id) {
-                  console.log(`🔄 Aggiornamento status: ${patient.name} → Critical`);
+                  console.log(`🔄 Aggiornamento: ${patient.name} (${patient.status} → Critical)`);
                   return { ...patient, status: 'Critical' };
                 }
                 return patient;
-              }).sort((a, b) => (a.status === 'Critical' ? -1 : 1)); // Riordina con Critical in cima
+              }).sort((a, b) => (a.status === 'Critical' ? -1 : 1));
+              
+              console.log(`📊 Lista aggiornata: ${updated.filter(p => p.status === 'Critical').length} pazienti Critical`);
+              return updated;
             });
           }
+          
+          // CASO 2: Aggiornamento Parametri Vitali (Tutti i pazienti)
+          else if (message.action === 'vitalUpdate') {
+            const vitals = message.data;
+            console.log(`📊 VitalUpdate: ${vitals.name} - Status: ${vitals.status}`);
+            
+            setPatients(prev => {
+              const updated = prev.map(patient => {
+                if (patient.patient_id === vitals.patient_id) {
+                  return {
+                    ...patient,
+                    status: vitals.status,  // Aggiorna status (può essere Critical, Stable, Warning)
+                    latest_vitals: {
+                      heart_rate: vitals.heart_rate,
+                      bp: `${vitals.bp_systolic}/${vitals.bp_diastolic}`,
+                      spo2: vitals.spo2,
+                      temperature: vitals.temperature,
+                      timestamp: vitals.timestamp
+                    }
+                  };
+                }
+                return patient;
+              }).sort((a, b) => {
+                // Ordinamento: Critical > Warning > Stable
+                const order = { Critical: 0, Warning: 1, Stable: 2 };
+                return (order[a.status] || 999) - (order[b.status] || 999);
+              });
+              
+              return updated;
+            });
+          }
+          
         } catch (error) {
-          console.error("❌ Errore parsing messaggio WebSocket:", error);
+          console.error("❌ Errore parsing messaggio:", error);
         }
       };
 
@@ -127,7 +168,12 @@ function App() {
     };
   }, [WEBSOCKET_URL, getAuthToken]);
 
-  // NUOVO: Polling periodico per aggiornare la lista pazienti dal database (ogni 30 secondi)
+  // ⚠️ POLLING COMPLETAMENTE DISABILITATO
+  // Il WebSocket gestisce TUTTI gli aggiornamenti in tempo reale
+  // Non riattivare questo codice a meno che non ci siano modifiche esterne al database
+  
+  /*
+  // ❌ NON USARE - Causa conflitti con WebSocket
   useEffect(() => {
     const interval = setInterval(async () => {
       const token = await getAuthToken();
@@ -138,22 +184,41 @@ function App() {
           headers: { Authorization: token }
         });
         const sorted = response.data.sort((a, b) => (a.status === 'Critical' ? -1 : 1));
-        setPatients(sorted);
+        
+        setPatients(prev => {
+          return sorted.map(dbPatient => {
+            const localPatient = prev.find(p => p.patient_id === dbPatient.patient_id);
+            if (localPatient?.latest_vitals) {
+              return { ...dbPatient, latest_vitals: localPatient.latest_vitals };
+            }
+            return dbPatient;
+          });
+        });
+        
         console.log("🔄 Lista pazienti aggiornata dal database");
       } catch (error) {
         console.error("Errore refresh pazienti:", error);
       }
-    }, 30000); // Ogni 30 secondi
+    }, 30000);
 
     return () => clearInterval(interval);
   }, [BASE_URL, getAuthToken]);
+  */
 
   // Rimuovi un singolo allarme
   const handleRemoveAlert = useCallback((alertId) => {
-    setActiveAlerts(prev => prev.filter(alert => 
-      (alert.alert_id || alert.patient_id) !== alertId
-    ));
-    console.log(`🗑️ Allarme rimosso: ${alertId}`);
+    console.log(`🗑️ Tentativo rimozione allarme ID: ${alertId}`);
+    
+    setActiveAlerts(prev => {
+      const filtered = prev.filter((alert, index) => {
+        // Usa alert_id se disponibile, altrimenti usa l'index
+        const currentId = alert.alert_id || index;
+        return currentId !== alertId;
+      });
+      
+      console.log(`   Prima: ${prev.length} allarmi, Dopo: ${filtered.length} allarmi`);
+      return filtered;
+    });
   }, []);
 
   // Cancella tutti gli allarmi
@@ -198,6 +263,18 @@ function App() {
                     <div className="p-info">
                       <strong>{p.name}</strong>
                       <span className="p-id">{p.patient_id}</span>
+
+                      {/* Mostra parametri vitali (solo se disponibili via vitalUpdate) */}
+                      {p.latest_vitals && (
+                        <span style={{
+                          fontSize: '0.75rem', 
+                          color: '#737373', 
+                          display: 'block',
+                          marginTop: '4px'
+                        }}>
+                          HR: {p.latest_vitals.heart_rate} | BP: {p.latest_vitals.bp} | SpO2: {p.latest_vitals.spo2}%
+                        </span>
+                      )}
                     </div>
                     <span className={`badge ${p.status.toLowerCase()}`}>{p.status}</span>
                   </li>

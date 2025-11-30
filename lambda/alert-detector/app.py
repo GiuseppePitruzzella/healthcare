@@ -8,16 +8,18 @@ dynamodb = boto3.resource('dynamodb')
 alerts_table = dynamodb.Table('Alerts')
 connection_table = dynamodb.Table('WebSocketConnections')
 
-# Client SNS per email
-sns_client = boto3.client('sns')
-SNS_TOPIC_ARN = "arn:aws:sns:eu-north-1:972742752781:healthcare_alerts"
+# WIP: Email aggregate - Temporaneamente disabilitate
+# Client SNS gestito da Lambda separata (hospital-batch-email-sender)
+# Vedere EventBridge Schedule per configurazione ogni 5 minuti
+# sns_client = boto3.client('sns')
+# SNS_TOPIC_ARN = "arn:aws:sns:eu-north-1:972742752781:HospitalEmergencyAlerts"
 
 # Configurazione WebSocket
 WEBSOCKET_ENDPOINT = 'dbohl3t6fa.execute-api.eu-north-1.amazonaws.com'
 WEBSOCKET_STAGE = 'production'
 REGION_NAME = 'eu-north-1'
 
-# Client API Gateway per WebSocket
+# Client API Gateway (creato fuori dal handler per caching)
 gateway_client = boto3.client(
     'apigatewaymanagementapi',
     endpoint_url=f"https://{WEBSOCKET_ENDPOINT}/{WEBSOCKET_STAGE}",
@@ -27,7 +29,7 @@ gateway_client = boto3.client(
 
 def check_vitals(record):
     """
-    Analizza i parametri vitali e restituisce una lista di problemi trovati
+    Analizza i parametri vitali e ritorna dati completi + violazioni
     """
     new_image = record['dynamodb']['NewImage']
     
@@ -35,55 +37,83 @@ def check_vitals(record):
         if 'N' in new_image.get(key, {}):
             return float(new_image[key]['N'])
         return None
-    
+
+    # Estraiamo i dati
     hr = get_val('heart_rate')
     sys = get_val('bp_systolic')
+    dia = get_val('bp_diastolic')
     spo2 = get_val('spo2')
     temp = get_val('temperature')
     pid = new_image['patient_id']['S']
     pname = new_image.get('patient_name', {}).get('S', 'Sconosciuto')
     
+    # Status iniziale dal database (se presente)
+    current_status = new_image.get('status', {}).get('S', 'Stable')
+
     violations = []
-    
+    is_critical = False
+
     # Soglie Critiche
     if hr and hr > 110:
         violations.append(f"Tachicardia: {hr} bpm")
+        is_critical = True
     elif hr and hr < 45:
         violations.append(f"Bradicardia: {hr} bpm")
+        is_critical = True
     
     if sys and sys > 160:
         violations.append(f"Ipertensione: {sys} mmHg")
+        is_critical = True
     
     if spo2 and spo2 < 90:
         violations.append(f"Ipossia: {spo2}%")
+        is_critical = True
     
     if temp and temp > 38.5:
         violations.append(f"Febbre alta: {temp}°C")
-    
-    return pid, pname, violations
+        is_critical = True
+
+    # Determina lo status finale
+    if is_critical:
+        final_status = 'Critical'
+    elif current_status == 'Critical':
+        # Mantieni Critical se era già Critical (non declassare automaticamente)
+        final_status = 'Critical'
+    else:
+        # Altrimenti usa lo status del database
+        final_status = current_status
+
+    # Dati completi per il frontend
+    vitals_data = {
+        "patient_id": pid,
+        "name": pname,
+        "heart_rate": hr,
+        "bp_systolic": sys,
+        "bp_diastolic": dia,
+        "spo2": spo2,
+        "temperature": temp,
+        "status": final_status,
+        "timestamp": datetime.now().isoformat()
+    }
+
+    return pid, pname, violations, vitals_data, is_critical
 
 
-def broadcast_websocket(alert_data):
+def broadcast_websocket(payload):
     """
-    Invia l'allarme a tutti i client WebSocket connessi
+    Invia messaggi a tutti i client WebSocket connessi
+    Gestisce automaticamente le connessioni morte
     """
     try:
-        # Recupera tutte le connessioni attive
+        # Recupera connessioni attive
         response = connection_table.scan(ProjectionExpression='connectionId')
         active_connections = response.get('Items', [])
         
         if not active_connections:
-            print("⚠️ NESSUN CLIENT WEBSOCKET CONNESSO")
+            print("⚠️ Nessun client WebSocket connesso")
             return False
         
-        # Prepara il payload nel formato che il frontend si aspetta
-        alert_payload = {
-            "action": "newAlert",
-            "data": alert_data
-        }
-        
-        data_to_send = json.dumps(alert_payload, default=str)
-        print(f"📤 Invio allarme WebSocket a {len(active_connections)} client")
+        data_to_send = json.dumps(payload, default=str).encode('utf-8')
         
         dead_connections = []
         successful_sends = 0
@@ -93,89 +123,56 @@ def broadcast_websocket(alert_data):
             try:
                 gateway_client.post_to_connection(
                     ConnectionId=connection_id,
-                    Data=data_to_send.encode('utf-8')
+                    Data=data_to_send
                 )
                 successful_sends += 1
-                print(f"✅ WebSocket inviato a {connection_id}")
                 
             except gateway_client.exceptions.GoneException:
-                print(f"🔌 Connessione morta: {connection_id}")
                 dead_connections.append(connection_id)
                 
             except Exception as e:
-                print(f"❌ Errore invio WebSocket a {connection_id}: {str(e)}")
+                print(f"❌ Errore invio a {connection_id}: {str(e)}")
         
-        # Pulisci connessioni morte
+        # Rimuovi connessioni morte
         for conn_id in dead_connections:
             try:
                 connection_table.delete_item(Key={'connectionId': conn_id})
             except Exception as e:
                 print(f"⚠️ Errore rimozione {conn_id}: {str(e)}")
         
-        print(f"📊 WebSocket: {successful_sends}/{len(active_connections)} inviati, {len(dead_connections)} rimossi")
+        if dead_connections:
+            print(f"🗑️ Rimosse {len(dead_connections)} connessioni morte")
+        
         return successful_sends > 0
         
     except Exception as e:
-        print(f"❌ ERRORE WebSocket broadcast: {str(e)}")
-        return False
-
-
-def send_sns_notification(patient_id, patient_name, violations, timestamp):
-    """
-    Invia notifica email via SNS
-    """
-    try:
-        message_text = f"""
-🚨 ALLARME CRITICO - CODICE ROSSO
-
-Paziente: {patient_name}
-ID: {patient_id}
-Data/Ora: {timestamp}
-
-Problemi Rilevati:
-{chr(10).join([f'• {v}' for v in violations])}
-
-⚠️ INTERVENIRE IMMEDIATAMENTE ⚠️
-
-Questo è un messaggio automatico dal sistema di monitoraggio Hospital Cloud.
-"""
-        
-        response = sns_client.publish(
-            TopicArn=SNS_TOPIC_ARN,
-            Message=message_text,
-            Subject=f"🚨 CODICE ROSSO: {patient_name} ({patient_id})"
-        )
-        
-        print(f"📧 Notifica SNS inviata! MessageId: {response['MessageId']}")
-        return True
-        
-    except Exception as e:
-        print(f"❌ ERRORE invio SNS: {str(e)}")
+        print(f"❌ Errore broadcast: {str(e)}")
         return False
 
 
 def lambda_handler(event, context):
     """
-    Gestisce i nuovi record di DynamoDB Stream e invia allarmi
+    Gestisce i nuovi record DynamoDB Stream e invia notifiche
     """
-    print(f"🔍 Ricevuti {len(event['Records'])} record da analizzare")
+    print(f"🏥 Ricevuti {len(event['Records'])} record")
     
-    alerts_sent = 0
+    alerts_count = 0
+    updates_count = 0
     
-    for record in event['Records']:
+    for idx, record in enumerate(event['Records']):
         if record['eventName'] == 'INSERT':
             try:
-                pid, pname, violations = check_vitals(record)
+                pid, pname, violations, vitals_data, is_critical = check_vitals(record)
                 
+                # --- 1. ALLARME CRITICO (se ci sono violazioni) ---
                 if violations:
+                    alerts_count += 1
                     timestamp = datetime.now().isoformat()
-                    message_text = f"Paziente: {pname} ({pid})\nProblemi: {', '.join(violations)}"
                     
-                    print(f"🚨 ALLARME RILEVATO!")
-                    print(f"   Paziente: {pname} ({pid})")
-                    print(f"   Problemi: {', '.join(violations)}")
+                    print(f"\n🚨 ALLARME #{alerts_count}: {pname} ({pid})")
+                    print(f"   Violazioni: {', '.join(violations)}")
                     
-                    # 1. Salva l'allarme nel database
+                    # Salva in database
                     alert_id = str(uuid.uuid4())
                     alerts_table.put_item(Item={
                         'alert_id': alert_id,
@@ -183,52 +180,48 @@ def lambda_handler(event, context):
                         'patient_name': pname,
                         'timestamp': timestamp,
                         'severity': 'CRITICAL',
-                        'message': message_text,
+                        'message': ' | '.join(violations),
                         'status': 'NEW'
                     })
-                    print(f"💾 Allarme salvato su DB con ID: {alert_id}")
                     
-                    # 2. Prepara i dati per le notifiche
-                    alert_data = {
-                        "alert_id": alert_id,
-                        "patient_id": pid,
-                        "name": pname,
-                        "violations": violations,
-                        "severity": "CRITICAL",
-                        "timestamp": timestamp,
-                        "message": message_text
+                    # WebSocket: Notifica allarme critico
+                    alert_payload = {
+                        "action": "newAlert",
+                        "data": {
+                            "alert_id": alert_id,
+                            "patient_id": pid,
+                            "name": pname,
+                            "violations": violations,
+                            "severity": "CRITICAL",
+                            "timestamp": timestamp
+                        }
                     }
-                    
-                    # 3. Invia notifica WebSocket in tempo reale
-                    websocket_success = broadcast_websocket(alert_data)
-                    
-                    # 4. Invia notifica SNS (Email)
-                    sns_success = send_sns_notification(pid, pname, violations, timestamp)
-                    
-                    # Riepilogo
-                    if websocket_success or sns_success:
-                        alerts_sent += 1
-                        print(f"✅ Allarme #{alerts_sent} notificato")
-                        print(f"   - WebSocket: {'✅ Inviato' if websocket_success else '❌ Fallito'}")
-                        print(f"   - SNS Email: {'✅ Inviato' if sns_success else '❌ Fallito'}")
-                    else:
-                        print(f"⚠️ Allarme salvato ma NESSUNA notifica inviata con successo")
-                    
-                else:
-                    print(f"✅ Parametri vitali OK per {pname} ({pid})")
-                    
+                    broadcast_websocket(alert_payload)
+                    print(f"   📤 Allarme critico inviato via WebSocket")
+                
+                # --- 2. AGGIORNAMENTO PARAMETRI VITALI (SEMPRE) ---
+                updates_count += 1
+                update_payload = {
+                    "action": "vitalUpdate",
+                    "data": vitals_data
+                }
+                broadcast_websocket(update_payload)
+                
+                status_emoji = "🚨" if vitals_data['status'] == 'Critical' else "💚"
+                print(f"{status_emoji} VitalUpdate: {pname} ({pid}) - Status: {vitals_data['status']}")
+                
             except Exception as e:
-                print(f"❌ Errore nel processamento del record: {str(e)}")
+                print(f"❌ Errore record #{idx}: {str(e)}")
                 import traceback
                 print(traceback.format_exc())
                 continue
     
-    print(f"🏁 Completato: {alerts_sent} allarmi notificati")
+    print(f"\n🏁 Completato: {alerts_count} allarmi, {updates_count} aggiornamenti vitali")
     
     return {
         'statusCode': 200,
         'body': json.dumps({
-            'message': 'Analisi completata',
-            'alerts_sent': alerts_sent
+            'alerts': alerts_count,
+            'updates': updates_count
         })
     }
