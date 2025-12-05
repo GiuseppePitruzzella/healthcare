@@ -35,8 +35,8 @@ function App() {
           headers: { Authorization: token } 
         });
         
-        const sorted = response.data.sort((a, b) => (a.status === 'Critical' ? -1 : 1));
-        setPatients(sorted);
+        // Nessun sorting - mantieni l'ordine originale dal database
+        setPatients(response.data);
       } catch (error) {
         console.error("Errore caricamento lista:", error);
       }
@@ -91,18 +91,16 @@ function App() {
               return [newAlert, ...prev];
             });
 
-            // 2. CRITICO: Aggiorna lo status del paziente → Critical
+            // 2. Aggiorna lo status del paziente
             setPatients(prev => {
-              const updated = prev.map(patient => {
+              return prev.map(patient => {
                 if (patient.patient_id === newAlert.patient_id) {
                   console.log(`🔄 Aggiornamento: ${patient.name} (${patient.status} → Critical)`);
                   return { ...patient, status: 'Critical' };
                 }
                 return patient;
-              }).sort((a, b) => (a.status === 'Critical' ? -1 : 1));
-              
-              console.log(`📊 Lista aggiornata: ${updated.filter(p => p.status === 'Critical').length} pazienti Critical`);
-              return updated;
+              });
+              // Nessun sorting - mantieni l'ordine originale
             });
           }
           
@@ -112,11 +110,11 @@ function App() {
             console.log(`📊 VitalUpdate: ${vitals.name} - Status: ${vitals.status}`);
             
             setPatients(prev => {
-              const updated = prev.map(patient => {
+              return prev.map(patient => {
                 if (patient.patient_id === vitals.patient_id) {
                   return {
                     ...patient,
-                    status: vitals.status,  // Aggiorna status (può essere Critical, Stable, Warning)
+                    status: vitals.status,
                     latest_vitals: {
                       heart_rate: vitals.heart_rate,
                       bp: `${vitals.bp_systolic}/${vitals.bp_diastolic}`,
@@ -127,13 +125,8 @@ function App() {
                   };
                 }
                 return patient;
-              }).sort((a, b) => {
-                // Ordinamento: Critical > Warning > Stable
-                const order = { Critical: 0, Warning: 1, Stable: 2 };
-                return (order[a.status] || 999) - (order[b.status] || 999);
               });
-              
-              return updated;
+              // Nessun sorting - mantieni l'ordine originale
             });
           }
           
