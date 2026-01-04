@@ -39,3 +39,7 @@ todo_*.*
 *.tfstate
 *.tfstate.backup
 .terraform.lock.hcl
+
+.env*
+
+README*.md

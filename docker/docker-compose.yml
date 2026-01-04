@@ -1,0 +1,110 @@
+version: '3.8'
+
+services:
+  # ===== DATA PROCESSOR =====
+  data-processor:
+    build:
+      context: .
+      dockerfile: docker/data-processor/Dockerfile
+    container_name: hospital-data-processor
+    ports:
+      - "8888:8888"  # Jupyter Lab
+    volumes:
+      - ./data:/app/data
+      - ./scripts:/app/scripts
+      - ./notebooks:/app/notebooks
+      - jupyter-data:/root/.jupyter
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-eu-north-1}
+      - PYTHONUNBUFFERED=1
+    networks:
+      - hospital-network
+    restart: unless-stopped
+    labels:
+      - "com.hospital.service=data-processor"
+      - "com.hospital.description=Jupyter environment for data analysis"
+
+  # ===== LOCAL IoT SIMULATOR =====
+  local-simulator:
+    build:
+      context: .
+      dockerfile: docker/local-simulator/Dockerfile
+    container_name: hospital-iot-simulator
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-eu-north-1}
+      - PATIENTS_TABLE=${PATIENTS_TABLE:-Patients-demo}
+      - VITAL_SIGNS_TABLE=${VITAL_SIGNS_TABLE:-VitalSigns-demo}
+      - SIMULATION_INTERVAL=${SIMULATION_INTERVAL:-30}
+      - NUM_PATIENTS=${NUM_PATIENTS:-20}
+    networks:
+      - hospital-network
+    restart: unless-stopped
+    depends_on:
+      - data-processor
+    labels:
+      - "com.hospital.service=simulator"
+      - "com.hospital.description=IoT medical device simulator"
+
+  # ===== FRONTEND DEVELOPMENT =====
+  frontend-dev:
+    build:
+      context: .
+      dockerfile: docker/frontend-dev/Dockerfile
+      target: development
+    container_name: hospital-frontend-dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+      - node-modules:/app/node_modules
+    environment:
+      - NODE_ENV=development
+      - REACT_APP_API_URL=${REACT_APP_API_URL}
+      - REACT_APP_WS_URL=${REACT_APP_WS_URL}
+      - REACT_APP_COGNITO_USER_POOL_ID=${REACT_APP_COGNITO_USER_POOL_ID}
+      - REACT_APP_COGNITO_CLIENT_ID=${REACT_APP_COGNITO_CLIENT_ID}
+      - CHOKIDAR_USEPOLLING=true
+    networks:
+      - hospital-network
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    labels:
+      - "com.hospital.service=frontend"
+      - "com.hospital.description=React development server"
+
+  # ===== FRONTEND PRODUCTION =====
+  frontend-prod:
+    build:
+      context: .
+      dockerfile: docker/frontend-dev/Dockerfile
+      target: production
+    container_name: hospital-frontend-prod
+    ports:
+      - "8080:80"
+    networks:
+      - hospital-network
+    restart: unless-stopped
+    profiles:
+      - production
+    labels:
+      - "com.hospital.service=frontend-prod"
+      - "com.hospital.description=Production Nginx server"
+
+# ===== NETWORKS =====
+networks:
+  hospital-network:
+    driver: bridge
+    name: hospital-monitoring-network
+
+# ===== VOLUMES =====
+volumes:
+  jupyter-data:
+    name: hospital-jupyter-data
+  node-modules:
+    name: hospital-node-modules

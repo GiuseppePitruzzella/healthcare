@@ -1,0 +1,8 @@
+# AWS SDK
+boto3==1.34.34
+
+# Data generation
+faker==22.6.0
+
+# Utilities
+python-dotenv==1.0.0
