@@ -119,13 +119,11 @@ resource "aws_cognito_user_pool_client" "hospital_client" {
   generate_secret = false
 
   callback_urls = [
-    "http://localhost:3000",
-    "http://${aws_s3_bucket.frontend.bucket}.s3-website.${var.aws_region}.amazonaws.com"
+    "http://localhost:3000"
   ]
 
   logout_urls = [
-    "http://localhost:3000",
-    "http://${aws_s3_bucket.frontend.bucket}.s3-website.${var.aws_region}.amazonaws.com"
+    "http://localhost:3000"
   ]
 
   allowed_oauth_flows_user_pool_client = true
