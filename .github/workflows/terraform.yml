@@ -1,0 +1,219 @@
+name: 🏗️ Terraform Infrastructure
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'terraform/**'
+      - '.github/workflows/terraform.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'terraform/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy (demo/prod)'
+        required: true
+        default: 'demo'
+        type: choice
+        options:
+          - demo
+          - prod
+      action:
+        description: 'Terraform action'
+        required: true
+        default: 'plan'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+
+env:
+  AWS_REGION: eu-north-1
+  TF_VERSION: 1.14.1
+
+jobs:
+  terraform-validate:
+    name: 🔍 Validate Terraform
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: 🎨 Terraform Format Check
+        working-directory: ./terraform
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: ✅ Terraform Init
+        working-directory: ./terraform
+        run: terraform init -backend=false
+
+      - name: 🔍 Terraform Validate
+        working-directory: ./terraform
+        run: terraform validate
+
+  terraform-plan:
+    name: 📋 Terraform Plan
+    runs-on: ubuntu-latest
+    needs: terraform-validate
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: ✅ Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: 📋 Terraform Plan
+        working-directory: ./terraform
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment || 'demo' }}
+          terraform plan -var="environment=${ENVIRONMENT}" -out=tfplan
+        continue-on-error: true
+
+      - name: 💾 Upload Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/tfplan
+          retention-days: 5
+
+  terraform-apply:
+    name: 🚀 Terraform Apply
+    runs-on: ubuntu-latest
+    needs: terraform-plan
+    if: |
+      github.event_name == 'workflow_dispatch' && 
+      github.event.inputs.action == 'apply' &&
+      github.ref == 'refs/heads/main'
+    environment:
+      name: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: ✅ Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: 🚀 Terraform Apply
+        working-directory: ./terraform
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment }}
+          terraform apply -var="environment=${ENVIRONMENT}" -auto-approve
+
+      - name: 📤 Export Outputs
+        working-directory: ./terraform
+        run: |
+          terraform output -json > outputs.json
+          echo "COGNITO_USER_POOL_ID=$(terraform output -raw cognito_user_pool_id)" >> $GITHUB_ENV
+          echo "REST_API_URL=$(terraform output -raw rest_api_url)" >> $GITHUB_ENV
+          echo "WEBSOCKET_URL=$(terraform output -raw websocket_url)" >> $GITHUB_ENV
+
+      - name: 💾 Save Outputs as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-outputs-${{ github.event.inputs.environment }}
+          path: terraform/outputs.json
+          retention-days: 30
+
+      - name: 📝 Comment PR with Outputs
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const outputs = JSON.parse(fs.readFileSync('terraform/outputs.json', 'utf8'));
+            
+            const comment = `### 🏗️ Terraform Apply Successful
+            
+            **Environment:** \`${{ github.event.inputs.environment }}\`
+            
+            **Outputs:**
+            \`\`\`json
+            ${JSON.stringify(outputs, null, 2)}
+            \`\`\`
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  terraform-destroy:
+    name: 🗑️ Terraform Destroy
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' && 
+      github.event.inputs.action == 'destroy' &&
+      github.event.inputs.environment == 'demo'
+    environment:
+      name: destroy-${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 🔧 Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: ✅ Terraform Init
+        working-directory: ./terraform
+        run: terraform init
+
+      - name: 🗑️ Terraform Destroy
+        working-directory: ./terraform
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment }}
+          terraform destroy -var="environment=${ENVIRONMENT}" -auto-approve
+
+      - name: 📢 Notify Destruction
+        run: |
+          echo "::notice::Infrastructure for ${{ github.event.inputs.environment }} has been destroyed"

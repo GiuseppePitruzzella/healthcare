@@ -1,0 +1,156 @@
+name: ⚡ Lambda Functions Deploy
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'lambda/**'
+      - '.github/workflows/lambda-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment (demo/prod)'
+        required: true
+        default: 'demo'
+        type: choice
+        options:
+          - demo
+          - prod
+      function:
+        description: 'Function to deploy (all/specific)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - vitals-simulator
+          - alert-detector
+          - connection-manager
+          - api-handler
+
+env:
+  AWS_REGION: eu-north-1
+
+jobs:
+  test-lambda:
+    name: 🧪 Test Lambda Functions
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Install dependencies
+        run: |
+          pip install boto3 pytest pytest-cov moto
+
+      - name: 🧪 Run tests
+        run: |
+          # Eseguire test qui
+          # pytest tests/ --cov=lambda --cov-report=xml
+          echo "✅ No tests configured yet"
+
+      - name: 📊 Upload coverage
+        if: false  # Abilitare per test
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+
+  deploy-lambda:
+    name: 🚀 Deploy Lambda
+    runs-on: ubuntu-latest
+    needs: test-lambda
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    
+    strategy:
+      matrix:
+        function:
+          - vitals-simulator
+          - alert-detector
+          - connection-manager
+          - api-handler
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔑 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 📦 Package Lambda
+        run: |
+          cd lambda/${{ matrix.function }}
+          zip -r ../../${{ matrix.function }}.zip .
+          cd ../..
+          ls -lh ${{ matrix.function }}.zip
+
+      - name: 🚀 Deploy to AWS Lambda
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment || 'demo' }}
+          FUNCTION_NAME="hospital-monitoring-${ENVIRONMENT}-${{ matrix.function }}"
+          
+          echo "🎯 Deploying to function: ${FUNCTION_NAME}"
+          
+          # Verifica se la funzione esiste
+          if aws lambda get-function --function-name ${FUNCTION_NAME} 2>/dev/null; then
+            echo "♻️  Updating existing function..."
+            aws lambda update-function-code \
+              --function-name ${FUNCTION_NAME} \
+              --zip-file fileb://${{ matrix.function }}.zip
+            
+            echo "⏳ Waiting for update to complete..."
+            aws lambda wait function-updated --function-name ${FUNCTION_NAME}
+            
+            echo "✅ Function ${FUNCTION_NAME} updated successfully"
+          else
+            echo "⚠️  Function ${FUNCTION_NAME} does not exist. Deploy with Terraform first."
+            exit 1
+          fi
+
+      - name: 🔄 Publish new version
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment || 'demo' }}
+          FUNCTION_NAME="hospital-monitoring-${ENVIRONMENT}-${{ matrix.function }}"
+          
+          VERSION=$(aws lambda publish-version \
+            --function-name ${FUNCTION_NAME} \
+            --query 'Version' \
+            --output text)
+          
+          echo "📦 Published version: ${VERSION}"
+          echo "LAMBDA_VERSION_${{ matrix.function }}=${VERSION}" >> $GITHUB_ENV
+
+      - name: 📊 Get function info
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment || 'demo' }}
+          FUNCTION_NAME="hospital-monitoring-${ENVIRONMENT}-${{ matrix.function }}"
+          
+          aws lambda get-function \
+            --function-name ${FUNCTION_NAME} \
+            --query 'Configuration.[FunctionName,Runtime,MemorySize,Timeout,LastModified]' \
+            --output table
+
+  notify-deployment:
+    name: 📢 Notify Deployment
+    runs-on: ubuntu-latest
+    needs: deploy-lambda
+    if: always()
+    
+    steps:
+      - name: 📢 Deployment Summary
+        run: |
+          echo "### ⚡ Lambda Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ github.event.inputs.environment || 'demo' }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ${{ needs.deploy-lambda.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** $(date -u)" >> $GITHUB_STEP_SUMMARY

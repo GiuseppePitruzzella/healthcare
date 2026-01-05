@@ -1,0 +1,205 @@
+name: 🎨 Frontend Deploy
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/frontend-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment (demo/prod)'
+        required: true
+        default: 'demo'
+        type: choice
+        options:
+          - demo
+          - prod
+
+env:
+  AWS_REGION: eu-north-1
+  NODE_VERSION: '18'
+
+jobs:
+  build-frontend:
+    name: 🏗️ Build React App
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 📦 Install dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: 🧪 Run linting
+        working-directory: ./frontend
+        run: npm run lint --if-present
+        continue-on-error: true
+
+      - name: 🧪 Run tests
+        working-directory: ./frontend
+        run: npm test --if-present -- --coverage --watchAll=false
+        continue-on-error: true
+
+      - name: 🔑 Get Terraform outputs
+        id: terraform-outputs
+        run: |
+          # Se hai Terraform outputs salvati come artifact, scaricali
+          # Altrimenti usa valori di default o secrets
+          echo "API_URL=${{ secrets.REACT_APP_API_URL }}" >> $GITHUB_OUTPUT
+          echo "WS_URL=${{ secrets.REACT_APP_WS_URL }}" >> $GITHUB_OUTPUT
+          echo "COGNITO_POOL_ID=${{ secrets.REACT_APP_COGNITO_USER_POOL_ID }}" >> $GITHUB_OUTPUT
+          echo "COGNITO_CLIENT_ID=${{ secrets.REACT_APP_COGNITO_CLIENT_ID }}" >> $GITHUB_OUTPUT
+
+      - name: 🏗️ Build production
+        working-directory: ./frontend
+        env:
+          REACT_APP_API_URL: ${{ steps.terraform-outputs.outputs.API_URL }}
+          REACT_APP_WS_URL: ${{ steps.terraform-outputs.outputs.WS_URL }}
+          REACT_APP_COGNITO_USER_POOL_ID: ${{ steps.terraform-outputs.outputs.COGNITO_POOL_ID }}
+          REACT_APP_COGNITO_CLIENT_ID: ${{ steps.terraform-outputs.outputs.COGNITO_CLIENT_ID }}
+          REACT_APP_ENVIRONMENT: ${{ github.event.inputs.environment || 'demo' }}
+        run: npm run build
+
+      - name: 📊 Build info
+        working-directory: ./frontend/build
+        run: |
+          echo "### 📦 Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Size:** $(du -sh . | cut -f1)" >> $GITHUB_STEP_SUMMARY
+          echo "**Files:** $(find . -type f | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ls -lh >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: 💾 Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build-${{ github.event.inputs.environment || 'demo' }}
+          path: frontend/build/
+          retention-days: 7
+
+  deploy-s3:
+    name: 🚀 Deploy to S3
+    runs-on: ubuntu-latest
+    needs: build-frontend
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: 📥 Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-build-${{ github.event.inputs.environment || 'demo' }}
+          path: ./build
+
+      - name: 🔑 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 🔍 Find S3 bucket
+        id: find-bucket
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment || 'demo' }}
+          
+          # Cerca bucket che corrisponde al pattern
+          BUCKET_NAME=$(aws s3api list-buckets \
+            --query "Buckets[?contains(Name, 'hospital-monitoring-${ENVIRONMENT}-frontend')].Name" \
+            --output text | head -n1)
+          
+          if [ -z "$BUCKET_NAME" ]; then
+            echo "❌ No S3 bucket found for environment: ${ENVIRONMENT}"
+            echo "Please create infrastructure with Terraform first"
+            exit 1
+          fi
+          
+          echo "bucket_name=${BUCKET_NAME}" >> $GITHUB_OUTPUT
+          echo "🪣 Found bucket: ${BUCKET_NAME}"
+
+      - name: 🧹 Clear S3 bucket (optional)
+        run: |
+          BUCKET_NAME=${{ steps.find-bucket.outputs.bucket_name }}
+          echo "🗑️ Clearing old files from ${BUCKET_NAME}..."
+          aws s3 rm s3://${BUCKET_NAME} --recursive --exclude "*.keep"
+
+      - name: 📤 Sync to S3
+        run: |
+          BUCKET_NAME=${{ steps.find-bucket.outputs.bucket_name }}
+          
+          aws s3 sync ./build s3://${BUCKET_NAME} \
+            --delete \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "*.html" \
+            --exclude "service-worker.js" \
+            --exclude "manifest.json"
+          
+          # HTML files con cache breve
+          aws s3 sync ./build s3://${BUCKET_NAME} \
+            --exclude "*" \
+            --include "*.html" \
+            --include "service-worker.js" \
+            --include "manifest.json" \
+            --cache-control "public, max-age=0, must-revalidate"
+
+      - name: 🔄 Invalidate CloudFront (se presente)
+        continue-on-error: true
+        run: |
+          # Se usi CloudFront, invalida la cache
+          # DISTRIBUTION_ID=$(aws cloudfront list-distributions ...)
+          # aws cloudfront create-invalidation --distribution-id $DISTRIBUTION_ID --paths "/*"
+          echo "⏭️ CloudFront invalidation skipped (not configured)"
+
+      - name: 🌐 Get website URL
+        run: |
+          BUCKET_NAME=${{ steps.find-bucket.outputs.bucket_name }}
+          
+          WEBSITE_URL=$(aws s3api get-bucket-website \
+            --bucket ${BUCKET_NAME} \
+            --query 'IndexDocument.Suffix' \
+            --output text 2>/dev/null || echo "Not configured")
+          
+          if [ "$WEBSITE_URL" != "Not configured" ]; then
+            FULL_URL="http://${BUCKET_NAME}.s3-website.${AWS_REGION}.amazonaws.com"
+            echo "### 🌐 Deployment Successful!" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**URL:** ${FULL_URL}" >> $GITHUB_STEP_SUMMARY
+            echo "**Bucket:** ${BUCKET_NAME}" >> $GITHUB_STEP_SUMMARY
+            echo "**Environment:** ${{ github.event.inputs.environment || 'demo' }}" >> $GITHUB_STEP_SUMMARY
+            
+            echo "::notice::Frontend deployed to ${FULL_URL}"
+          fi
+
+  smoke-test:
+    name: 🧪 Smoke Test
+    runs-on: ubuntu-latest
+    needs: deploy-s3
+    
+    steps:
+      - name: 🔍 Test website accessibility
+        run: |
+          BUCKET_NAME=$(echo "${{ needs.deploy-s3.outputs.bucket_name }}" | head -n1)
+          URL="http://${BUCKET_NAME}.s3-website.${AWS_REGION}.amazonaws.com"
+          
+          echo "🧪 Testing: ${URL}"
+          
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" ${URL} || echo "000")
+          
+          if [ "$HTTP_CODE" == "200" ]; then
+            echo "✅ Website is accessible (HTTP $HTTP_CODE)"
+          else
+            echo "⚠️ Website returned HTTP $HTTP_CODE"
+            exit 1
+          fi

@@ -1,0 +1,230 @@
+name: 🚀 Full Deployment Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'demo'
+        type: choice
+        options:
+          - demo
+          - prod
+      deploy_infrastructure:
+        description: 'Deploy Terraform infrastructure'
+        required: true
+        default: true
+        type: boolean
+      deploy_lambda:
+        description: 'Deploy Lambda functions'
+        required: true
+        default: true
+        type: boolean
+      deploy_frontend:
+        description: 'Deploy frontend'
+        required: true
+        default: true
+        type: boolean
+
+env:
+  AWS_REGION: eu-north-1
+
+jobs:
+  pre-flight-check:
+    name: ✈️ Pre-flight Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔍 Validate repository structure
+        run: |
+          echo "Checking repository structure..."
+          
+          REQUIRED_DIRS=(
+            "terraform"
+            "lambda/vitals-simulator"
+            "lambda/alert-detector"
+            "lambda/connection-manager"
+            "lambda/api-handler"
+            "frontend"
+            "docker"
+          )
+          
+          for dir in "${REQUIRED_DIRS[@]}"; do
+            if [ -d "$dir" ]; then
+              echo "✅ $dir"
+            else
+              echo "❌ Missing: $dir"
+              exit 1
+            fi
+          done
+
+      - name: 🔑 Verify AWS credentials
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          if [ -z "$AWS_ACCESS_KEY_ID" ] || [ -z "$AWS_SECRET_ACCESS_KEY" ]; then
+            echo "❌ AWS credentials not configured in GitHub Secrets"
+            exit 1
+          fi
+          echo "✅ AWS credentials configured"
+
+      - name: 📊 Deployment Plan
+        run: |
+          echo "### 🚀 Deployment Plan" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** \`${{ github.event.inputs.environment }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Infrastructure:** ${{ github.event.inputs.deploy_infrastructure }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Lambda Functions:** ${{ github.event.inputs.deploy_lambda }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Frontend:** ${{ github.event.inputs.deploy_frontend }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+
+  deploy-infrastructure:
+    name: 🏗️ Deploy Infrastructure
+    needs: pre-flight-check
+    if: github.event.inputs.deploy_infrastructure == 'true'
+    uses: ./.github/workflows/terraform.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      action: apply
+    secrets: inherit
+
+  deploy-lambda-functions:
+    name: ⚡ Deploy Lambda Functions
+    needs: [pre-flight-check, deploy-infrastructure]
+    if: |
+      always() &&
+      github.event.inputs.deploy_lambda == 'true' &&
+      (needs.deploy-infrastructure.result == 'success' || needs.deploy-infrastructure.result == 'skipped')
+    uses: ./.github/workflows/lambda-deploy.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      function: all
+    secrets: inherit
+
+  deploy-frontend-app:
+    name: 🎨 Deploy Frontend
+    needs: [pre-flight-check, deploy-infrastructure]
+    if: |
+      always() &&
+      github.event.inputs.deploy_frontend == 'true' &&
+      (needs.deploy-infrastructure.result == 'success' || needs.deploy-infrastructure.result == 'skipped')
+    uses: ./.github/workflows/frontend-deploy.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+    secrets: inherit
+
+  post-deployment-tests:
+    name: 🧪 Post-Deployment Tests
+    runs-on: ubuntu-latest
+    needs: [deploy-lambda-functions, deploy-frontend-app]
+    if: always()
+    
+    steps:
+      - name: 🔑 Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: 🔍 Verify Lambda functions
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment }}
+          
+          FUNCTIONS=(
+            "hospital-monitoring-${ENVIRONMENT}-vitals-simulator"
+            "hospital-monitoring-${ENVIRONMENT}-alert-detector"
+            "hospital-monitoring-${ENVIRONMENT}-connection-manager"
+            "hospital-monitoring-${ENVIRONMENT}-api-handler"
+          )
+          
+          echo "### ⚡ Lambda Functions Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Function | Status | Runtime | Last Modified |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|---------|---------------|" >> $GITHUB_STEP_SUMMARY
+          
+          for func in "${FUNCTIONS[@]}"; do
+            if aws lambda get-function --function-name $func > /dev/null 2>&1; then
+              STATUS="✅ Active"
+              RUNTIME=$(aws lambda get-function-configuration --function-name $func --query 'Runtime' --output text)
+              MODIFIED=$(aws lambda get-function-configuration --function-name $func --query 'LastModified' --output text)
+              echo "| $func | $STATUS | $RUNTIME | $MODIFIED |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| $func | ❌ Not Found | - | - |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+      - name: 🔍 Verify DynamoDB tables
+        run: |
+          ENVIRONMENT=${{ github.event.inputs.environment }}
+          
+          TABLES=(
+            "Patients-${ENVIRONMENT}"
+            "VitalSigns-${ENVIRONMENT}"
+            "Alerts-${ENVIRONMENT}"
+            "WebSocketConnections-${ENVIRONMENT}"
+          )
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 💾 DynamoDB Tables Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Table | Status | Items | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|-------|------|" >> $GITHUB_STEP_SUMMARY
+          
+          for table in "${TABLES[@]}"; do
+            if aws dynamodb describe-table --table-name $table > /dev/null 2>&1; then
+              STATUS="✅ Active"
+              ITEMS=$(aws dynamodb describe-table --table-name $table --query 'Table.ItemCount' --output text)
+              SIZE=$(aws dynamodb describe-table --table-name $table --query 'Table.TableSizeBytes' --output text)
+              SIZE_KB=$((SIZE / 1024))
+              echo "| $table | $STATUS | $ITEMS | ${SIZE_KB} KB |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| $table | ❌ Not Found | - | - |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+  deployment-summary:
+    name: 📊 Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [deploy-infrastructure, deploy-lambda-functions, deploy-frontend-app, post-deployment-tests]
+    if: always()
+    
+    steps:
+      - name: 📊 Generate final summary
+        run: |
+          echo "### 🎯 Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** \`${{ github.event.inputs.environment }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Results:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Infrastructure: ${{ needs.deploy-infrastructure.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Lambda Functions: ${{ needs.deploy-lambda-functions.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Frontend: ${{ needs.deploy-frontend-app.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Tests: ${{ needs.post-deployment-tests.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Timestamp:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+      - name: 🎉 Success notification
+        if: |
+          needs.deploy-infrastructure.result == 'success' &&
+          needs.deploy-lambda-functions.result == 'success' &&
+          needs.deploy-frontend-app.result == 'success'
+        run: |
+          echo "::notice::🎉 Full deployment completed successfully!"
+
+      - name: ⚠️ Partial failure notification
+        if: |
+          needs.deploy-infrastructure.result == 'failure' ||
+          needs.deploy-lambda-functions.result == 'failure' ||
+          needs.deploy-frontend-app.result == 'failure'
+        run: |
+          echo "::warning::⚠️ Deployment completed with some failures. Check logs for details."
